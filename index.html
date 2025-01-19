@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>판별식</title>
+  <!-- MathJax 로드 (LaTeX 렌더링) -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" defer></script>
+  <style>
+    /* 흑백 테마 */
+    body {
+      background: #fff;
+      color: #000;
+      font-family: sans-serif;
+      margin: 20px;
+      line-height: 1.4;
+    }
+    h1, h2, h3 {
+      margin: 0.5em 0;
+    }
+    #gameScreen, #gameOverScreen {
+      margin-top: 1em;
+      border: 1px solid #000;
+      padding: 10px;
+    }
+    #energyBar {
+      height: 20px;
+      background: #ccc;
+      margin-bottom: 1em;
+      position: relative;
+      overflow: hidden;
+    }
+    #energyFill {
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      background: #000; /* 검정 막대 */
+      width: 100%;
+      transition: width 0.2s linear;
+    }
+    .choiceBtn {
+      display: block;
+      margin: 6px 0;
+      background: #fff;
+      color: #000;
+      border: 1px solid #000;
+      padding: 5px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .choiceBtn:hover {
+      background: #eee;
+    }
+    #response {
+      margin-top: 1em;
+      white-space: pre-wrap;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+<h1>판별식</h1>
+
+<!-- 난이도 및 이름 입력 -->
+<div id="startScreen">
+  <p>이름을 입력하세요: <input id="playerName" type="text" value="익명"></p>
+  <p>난이도 선택:
+    <select id="difficulty">
+      <option value="top">최상 (20초, 문제당 20점)</option>
+      <option value="high">상 (30초, 문제당 15점)</option>
+      <option value="medium">중 (40초, 문제당 13점)</option>
+      <option value="low">하 (시간제한 없음, 문제당 10점)</option>
+    </select>
+  </p>
+  <button onclick="startGame()">게임 시작</button>
+</div>
+
+<!-- 게임화면 -->
+<div id="gameScreen" class="hidden">
+  <div>
+    남은 기회: <span id="lives">3</span>
+    &nbsp;|&nbsp; 총 경과시간: <span id="totalTime">0</span>초
+    &nbsp;|&nbsp; 점수: <span id="score">0</span>
+  </div>
+  <div id="energyBar"><div id="energyFill"></div></div>
+  <div id="questionContainer"></div>
+  <div id="choicesContainer"></div>
+</div>
+
+<!-- 게임 오버 화면 -->
+<div id="gameOverScreen" class="hidden">
+  <h2>게임 종료</h2>
+  <p>최종 점수: <span id="finalScore"></span></p>
+  <button onclick="sendScore()">점수 전송</button>
+  <div id="response"></div>
+</div>
+
+<script>
+//====================================================
+// 문제 데이터: (question, choices[], correctIdx[])
+//   - correctIdx는 '정답 보기'의 원본 인덱스를 배열로 저장
+//   - 일부 문제는 중복 정답(예: [0,3])도 있음
+//====================================================
+
+function makeProblem(question, choices, correctIdx) {
+  // correctIdx는 배열 형태
+  return { question, choices, correctIdx };
+}
+
+const allProblems = [
+  //==== [묶음1] 한 근이 주어졌을 때 k 구하기 (6문항) ====
+  makeProblem(
+    "\\(x^2 + kx - 3k - 3 = 0\\) 의 한 근이 \\(x=1\\)일 때, \\(k\\)의 값은?",
+    [
+      "\\(k=-1\\)",
+      "\\(k=0\\)",
+      "\\(k=1\\)",
+      "\\(k=2\\)"
+    ],
+    [0] // 정답: k=-1
+  ),
+  makeProblem(
+    "\\(x^2 - kx - 10k - 2 = 0\\) 의 한 근이 \\(x=-3\\)일 때, \\(k\\)의 값은?",
+    [
+      "\\(k=-1\\)",
+      "\\(k=1\\)",
+      "\\(k=2\\)",
+      "\\(k=3\\)"
+    ],
+    [1] // 정답: k=1
+  ),
+  // 3) x^2 - kx - k^2 -5=0, 근=-3 => k=-1 또는 4 => choices: [-1,0,1,4]
+  makeProblem(
+    "\\(x^2 - kx - k^2 - 5 = 0\\) 의 한 근이 \\(x=-3\\)일 때, 가능한 \\(k\\)는?",
+    [
+      "\\(k=-1\\)", // index=0
+      "\\(k=0\\)",  // index=1
+      "\\(k=1\\)",  // index=2
+      "\\(k=4\\)"   // index=3
+    ],
+    [0,3] // 정답: k=-1 또는 4
+  ),
+  // 4) x^2 - kx +4k^2 -10=0, 근=2 => k=-1, 3/2 => choices: [-1, 3/2, 2, 3]
+  makeProblem(
+    "\\(x^2 - kx + 4k^2 - 10 = 0\\) 의 한 근이 \\(x=2\\)일 때, 가능한 \\(k\\)는?",
+    [
+      "\\(k=-1\\)",         // index=0
+      "\\(k=\\tfrac{3}{2}\\)", // index=1
+      "\\(k=2\\)",          // index=2
+      "\\(k=3\\)"           // index=3
+    ],
+    [0,1] // k=-1 또는 3/2
+  ),
+  // 5) x^2-(k-1)x + k^2=0, 근=-1 => k=0 또는 -1 => choices: [0, -1, 1, 2]
+  makeProblem(
+    "\\(x^2 - (k-1)x + k^2 = 0\\) 의 한 근이 \\(x=-1\\)일 때, 가능한 \\(k\\)는?",
+    [
+      "\\(k=0\\)",   //0
+      "\\(k=-1\\)",  //1
+      "\\(k=1\\)",   //2
+      "\\(k=2\\)"    //3
+    ],
+    [0,1] // k=0 or -1
+  ),
+  // 6) x^2-(k+2)x + 3k+2=0, 근=-2 => k=-2 => choices: [-2,1,2,3]
+  makeProblem(
+    "\\(x^2 - (k+2)x + 3k + 2 = 0\\) 의 한 근이 \\(x=-2\\)일 때, \\(k\\)의 값은?",
+    [
+      "\\(k=-2\\)",
+      "\\(k=1\\)",
+      "\\(k=2\\)",
+      "\\(k=3\\)"
+    ],
+    [0]
+  ),
+
+  //==== [묶음2] 서로 다른 두 실근, 한 근이 주어졌을 때 나머지 근 (6문항) ====
+  makeProblem(
+    "\\(x^2 - mx + 2m - 4 = 0\\) 이 서로 다른 두 실근을 갖고, 한 근이 \\(x=-1\\). 나머지 근은?",
+    [
+      "\\(x=-4\\)",
+      "\\(x=2\\)",
+      "\\(x=3\\)",
+      "\\(x=4\\)"
+    ],
+    [1] // 정답 2
+  ),
+  makeProblem(
+    "\\(x^2 - mx - 10m - 2 = 0\\) 이 서로 다른 두 실근, 한 근이 \\(x=-3\\). 나머지 근은?",
+    [
+      "\\(x=1\\)",
+      "\\(x=2\\)",
+      "\\(x=4\\)",
+      "\\(x=6\\)"
+    ],
+    [2] // 정답 4
+  ),
+  makeProblem(
+    "\\(x^2 + mx + 2m + 1 = 0\\) 이 서로 다른 두 실근, 한 근이 \\(x=-1\\). 나머지 근은?",
+    [
+      "\\(x=1\\)",
+      "\\(x=2\\)",
+      "\\(x=3\\)",
+      "\\(x=\\tfrac{5}{2}\\)"
+    ],
+    [2] // 정답 3
+  ),
+  // (10)
+  makeProblem(
+    "\\(x^2 + (2m+4)x + m^2 = 0\\) 이 서로 다른 두 실근, 한 근이 \\(x=-1\\). 나머지 근은?",
+    [
+      "\\(x=-9\\)",
+      "\\(x=-3\\)",
+      "\\(x=1\\)",
+      "\\(x=9\\)"
+    ],
+    [0] // 정답 -9
+  ),
+  // (11)
+  makeProblem(
+    "\\((m+3)x^2 - mx - 10 = 0\\) (\\(m\\neq 3\\)) 이 서로 다른 두 실근, 한 근이 \\(x=2\\). 나머지 근은?",
+    [
+      "\\(x=-5\\)",
+      "\\(x=-\\tfrac{5}{2}\\)",
+      "\\(x=\\tfrac{5}{2}\\)",
+      "\\(x=5\\)"
+    ],
+    [1] // -5/2
+  ),
+  // (12)
+  makeProblem(
+    "\\(m x^2 + (1-2m)x + (m^2+2m-1) = 0\\), (\\(m\\neq0\\)) 서로 다른 두 실근, 한 근이 \\(x=2\\). 나머지 근은?",
+    [
+      "\\(x=1\\)",
+      "\\(x=-1\\)",
+      "\\(x=-2\\)",
+      "\\(x=3\\)"
+    ],
+    [0] // 정답 1
+  ),
+
+  //==== [묶음3] 판별식 이용한 근 판별 (16문항: #13~#28) ====
+  makeProblem(
+    "\\(x^2 + 9=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "실수 해가 하나"
+    ],
+    [1] 
+  ),
+  makeProblem(
+    "\\(x^2 + x + 4=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [1]
+  ),
+  makeProblem(
+    "\\(3x^2 + 5x - 2=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [0]
+  ),
+  makeProblem(
+    "\\(7x^2 + 3x -1=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [0]
+  ),
+  makeProblem(
+    "\\(3x^2 - 6x + 4=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [1]
+  ),
+  makeProblem(
+    "\\(2x^2 - 3x + 2=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [1]
+  ),
+  makeProblem(
+    "\\(x^2 -4x + 6=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [1]
+  ),
+  makeProblem(
+    "\\(x^2 + 6x + 6=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [0]
+  ),
+  makeProblem(
+    "\\(x^2 + 10x + 25=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [2]
+  ),
+  makeProblem(
+    "\\(x^2 - x + 1=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [1]
+  ),
+  makeProblem(
+    "\\(3x^2 + x -2=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [0]
+  ),
+  makeProblem(
+    "\\(9x^2 -6x + 1=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [2]
+  ),
+  makeProblem(
+    "\\(3x^2 - 5x + 4=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [1]
+  ),
+  makeProblem(
+    "\\(x^2 + 3x -10=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [0]
+  ),
+  makeProblem(
+    "\\(x^2 - x + 2=0\\) 의 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [1]
+  ),
+  makeProblem(
+    "\\((x-2)(x-6)=5\\) => \\(x^2 -8x +7=0\\). 근의 판별?",
+    [
+      "서로 다른 두 실근",
+      "서로 다른 두 허근",
+      "중근",
+      "판별 불능"
+    ],
+    [0]
+  ),
+
+  //==== #36~#81 (43문항) ====
+  // #36
+  makeProblem(
+    "\\(x^2 - 3x + k=0\\) 이 [서로 다른 두 실근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k < \\tfrac{9}{4}\\)",
+      "\\(k > \\tfrac{9}{4}\\)",
+      "\\(k = \\tfrac{9}{4}\\)",
+      "\\(-\\tfrac{9}{4} < k < 0\\)"
+    ],
+    [0]
+  ),
+  // #37
+  makeProblem(
+    "\\(x^2 - 4x + k=0\\) 이 [서로 다른 두 실근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k < 4\\)",
+      "\\(k > 4\\)",
+      "\\(k=4\\)",
+      "\\(-4<k<0\\)"
+    ],
+    [0]
+  ),
+  // #38
+  makeProblem(
+    "\\(x^2 + 3x - k=0\\) 이 [중근]을 갖도록 하는 \\(k\\)의 값?",
+    [
+      "\\(-\\tfrac{9}{4}\\)",
+      "\\(\\tfrac{9}{4}\\)",
+      "\\(-\\tfrac{3}{4}\\)",
+      "\\(\\tfrac{3}{4}\\)"
+    ],
+    [0]
+  ),
+  // #39
+  makeProblem(
+    "\\(x^2 + 6x + (2k-3)=0\\) 이 [중근]을 갖도록 하는 \\(k\\)?",
+    [
+      "\\(k=3\\)",
+      "\\(k=4\\)",
+      "\\(k=6\\)",
+      "\\(k=-6\\)"
+    ],
+    [2]
+  ),
+  // #40
+  makeProblem(
+    "\\(x^2 + 4x - k=0\\) 이 [서로 다른 두 허근]을 갖도록 하는 \\(k\\)의 조건?",
+    [
+      "\\(k < -4\\)",
+      "\\(k > 4\\)",
+      "\\(-4<k<4\\)",
+      "\\(k=-4\\)"
+    ],
+    [0]
+  ),
+  // #41
+  makeProblem(
+    "\\((k\\neq 0)\\), \\(kx^2 + x +1=0\\) 이 [중근]을 갖도록 하는 \\(k\\)?",
+    [
+      "\\(k=\\tfrac12\\)",
+      "\\(k=1\\)",
+      "\\(k=\\tfrac14\\)",
+      "\\(\\text{어떤 }k\\text{도 불가}\\)"
+    ],
+    [2]
+  ),
+  // #42
+  makeProblem(
+    "\\(x^2 - (2k-1)x + k^2=0\\) 이 [중근]을 갖도록 하는 \\(k\\)?",
+    [
+      "\\(k=\\tfrac14\\)",
+      "\\(k=-\\tfrac14\\)",
+      "\\(k=\\tfrac12\\)",
+      "\\(k=1\\)"
+    ],
+    [0]
+  ),
+  // #43
+  makeProblem(
+    "\\(x^2 +16x + (k+1)=0\\) 이 [서로 다른 두 실근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k<63\\)",
+      "\\(k>63\\)",
+      "\\(k<-63\\)",
+      "\\(-1<k<63\\)"
+    ],
+    [0]
+  ),
+  // #44
+  makeProblem(
+    "\\(3x^2 + x + k=0\\) 이 [서로 다른 두 허근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k>\\tfrac{1}{12}\\)",
+      "\\(k< -\\tfrac{1}{12}\\)",
+      "\\(-\\tfrac{1}{12} < k <\\tfrac{1}{12}\\)",
+      "\\(\\text{불가능}\\)"
+    ],
+    [0]
+  ),
+  // #45
+  makeProblem(
+    "\\(x^2 - 3x + (k-1)=0\\) 이 [실근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k \\le \\tfrac{13}{4}\\)",
+      "\\(k \\ge \\tfrac{13}{4}\\)",
+      "\\(k < \\tfrac{13}{4}\\)",
+      "\\(\\text{모든 }k\\)"
+    ],
+    [0]
+  ),
+  // #46
+  makeProblem(
+    "\\(x^2 +3x - k=0\\) 이 [서로 다른 두 허근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k>\\tfrac{9}{4}\\)",
+      "\\(k< -\\tfrac{9}{4}\\)",
+      "\\(-\\tfrac{9}{4} < k <\\tfrac{9}{4}\\)",
+      "\\(-\\tfrac{9}{4} \\le k \\le \\tfrac{9}{4}\\)"
+    ],
+    [1]
+  ),
+  // #47
+  makeProblem(
+    "\\(x^2 + kx + (k+3)=0\\) 이 [중근]을 갖도록 하는 \\(k\\)?",
+    [
+      "\\(k=3\\)",
+      "\\(k=-3\\)",
+      "\\(\\text{불가}\\)",
+      "\\(k=6\\) \\(\\text{또는}\\) -2"
+    ],
+    [3]
+  ),
+  // #48
+  makeProblem(
+    "\\((k\\neq 0)\\), \\(kx^2 + 2kx -2=0\\) 이 [중근]을 갖도록 하는 \\(k\\)?",
+    [
+      "\\(k=-2\\)",
+      "\\(k=2\\)",
+      "\\(k=\\tfrac12\\)",
+      "\\(\\text{불가}\\)"
+    ],
+    [0]
+  ),
+  // #49
+  makeProblem(
+    "\\(x^2 -2(k-1)x + (k+3)=0\\) 이 [서로 다른 두 실근]을 갖도록 하는 \\(k\\)의 조건?",
+    [
+      "\\(k < \\tfrac{3 - \\sqrt{17}}{2}\\) \\text{ 또는 } k> \\tfrac{3 + \\sqrt{17}}{2}\\)",
+      "\\(k \\le -1\\)",
+      "\\(0<k<1\\)",
+      "\\(\\text{모든 }k\\)"
+    ],
+    [0]
+  ),
+  // #50
+  makeProblem(
+    "\\(3x^2 -6x + (k+1)=0\\) 이 [서로 다른 두 실근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k<2\\)",
+      "\\(k>2\\)",
+      "\\(-1<k<2\\)",
+      "\\(\\text{모든 }k\\)"
+    ],
+    [0]
+  ),
+  // #52
+  makeProblem(
+    "\\(x^2 - (2k-1)x + k^2=0\\) 이 [서로 다른 두 실근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k < \\tfrac14\\)",
+      "\\(k > \\tfrac14\\)",
+      "\\(k=\\tfrac14\\)",
+      "\\(\\text{불가}\\)"
+    ],
+    [0]
+  ),
+  // #54
+  makeProblem(
+    "\\(x^2 - (2k+1)x + k^2=0\\) 이 [서로 다른 두 실근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k>-\\tfrac14\\)",
+      "\\(k< -\\tfrac14\\)",
+      "\\(k=-\\tfrac14\\)",
+      "\\(\\text{어떤 }k\\text{도 불가}\\)"
+    ],
+    [0]
+  ),
+  // #55
+  makeProblem(
+    "\\((k\\neq 0)\\), \\(kx^2 +6x +3=0\\) 이 [서로 다른 두 허근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k>3\\)",
+      "\\(k<3\\)",
+      "\\(k=3\\)",
+      "\\(\\text{항상 허근}\\)"
+    ],
+    [0]
+  ),
+  // #56
+  makeProblem(
+    "\\(x^2 + (k+1)x + (k+1)=0\\) 이 [중근]을 갖도록 하는 \\(k\\)?",
+    [
+      "\\(k=3\\)",
+      "\\(k=-1\\)",
+      "\\(k=-1 \\text{ 또는 }3\\)",
+      "\\(\\text{불가}\\)"
+    ],
+    [2]
+  ),
+  // #57
+  makeProblem(
+    "\\((k\\neq 0)\\), \\(kx^2 + 8x +8=0\\) 이 [서로 다른 두 실근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k<2\\)",
+      "\\(k>2\\)",
+      "\\(k=2\\)",
+      "\\(\\text{어떤 }k\\neq0\\text{도 가능}\\)"
+    ],
+    [0]
+  ),
+  // #58
+  makeProblem(
+    "\\(x^2 - (k-1)x + (k-1)=0\\) 이 [중근]을 갖도록 하는 \\(k\\)?",
+    [
+      "\\(k=1\\)",
+      "\\(k=5\\)",
+      "\\(k=1 \\text{ 또는 }5\\)",
+      "\\(\\text{중근 불가}\\)"
+    ],
+    [2]
+  ),
+  // #59
+  makeProblem(
+    "\\(x^2 - 2(k+2)x + k^2=0\\) 이 [서로 다른 두 실근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k>-1\\)",
+      "\\(k<-1\\)",
+      "\\(k=-1\\)",
+      "\\(\\text{항상 실근}\\)"
+    ],
+    [0]
+  ),
+  // #60
+  makeProblem(
+    "\\((k\\neq 1)\\), \\((1-k)x^2 +3x +2=0\\) 이 [서로 다른 두 실근]을 갖도록 하는 \\(k\\)의 범위?",
+    [
+      "\\(k>-\\tfrac{1}{8}\\), (k\\neq 1)\\)",
+      "\\(k<-\\tfrac{1}{8}\\)",
+      "\\(-\\tfrac{1}{8}<k<1\\)",
+      "\\(\\text{어떤 }k\\neq1\\text{도 가능}\\)"
+    ],
+    [0]
+  ),
+  // #61 (원문 캡처 불명 → 답: k>2 로 가정)
+  makeProblem(
+    "[가정] \\(x^2 + 2(k-4)x + (\\dots)=0\\) 이 [서로 다른 두 허근], 정답 \\(k>2\\).",
+    [
+      "\\(k>2\\)",
+      "\\(k<2\\)",
+      "\\(k=2\\)",
+      "\\(\\text{언제나 허근}\\)"
+    ],
+    [0]
+  ),
+  // #62
+  makeProblem(
+    "\\((k\\neq -1,1)\\), \\((k^2-1)x^2 +2(k+1)x +2=0\\) 이 [중근]을 갖도록 하는 \\(k\\)?",
+    [
+      "\\(k=3\\)",
+      "\\(k=-1\\)",
+      "\\(k=1\\)",
+      "\\(\\text{그런 }k\\text{ 없음}\\)"
+    ],
+    [0]
+  ),
+  // #64
+  makeProblem(
+    "\\((k\\neq -2,2)\\), \\((k^2-4)x^2 -2(k+2)x + (k+2)=0\\) 이 [서로 다른 두 실근].",
+    [
+      "\\(-2<k<2\\)",
+      "\\(\\text{그 외 복합적 조건}\\)",
+      "\\(k=\\pm4\\)",
+      "\\(\\text{항상 실근}\\)"
+    ],
+    [1] // 단순 표시
+  ),
+  // #65
+  makeProblem(
+    "\\(x^2 -8x + a -8=0\\) 이 [완전제곱식(중근)] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=24\\)",
+      "\\(a=16\\)",
+      "\\(a=8\\)",
+      "\\(a=0\\)"
+    ],
+    [0]
+  ),
+  // #66
+  makeProblem(
+    "\\(ax^2 +3x -1=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=-\\tfrac94\\)",
+      "\\(a=3\\)",
+      "\\(a=1\\)",
+      "\\(a=0\\)"
+    ],
+    [0]
+  ),
+  // #67
+  makeProblem(
+    "\\(ax^2 +4x -2=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=-4\\)",
+      "\\(a=-2\\)",
+      "\\(a=2\\)",
+      "\\(a=4\\)"
+    ],
+    [1]
+  ),
+  // #68
+  makeProblem(
+    "\\(ax^2 +8x -4=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=-4\\)",
+      "\\(a=4\\)",
+      "\\(a=-1\\)",
+      "\\(a=0\\)"
+    ],
+    [0]
+  ),
+  // #69
+  makeProblem(
+    "\\(ax^2 +5x -4=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=-\\tfrac{25}{16}\\)",
+      "\\(a=\\tfrac{25}{16}\\)",
+      "\\(a=4\\)",
+      "\\(a=-1\\)"
+    ],
+    [0]
+  ),
+  // #70
+  makeProblem(
+    "\\(ax^2 -8x + a=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=\\pm2\\)",
+      "\\(a=\\pm4\\)",
+      "\\(a=4\\)",
+      "\\(a=0\\)"
+    ],
+    [1]
+  ),
+  // #71
+  makeProblem(
+    "\\(ax^2 +4x + a=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=2\\)",
+      "\\(a=\\pm2\\)",
+      "\\(a=-2\\)",
+      "\\(a=0\\)"
+    ],
+    [1]
+  ),
+  // #72
+  makeProblem(
+    "\\(a x^2 -4ax +3a +5=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=0\\)",
+      "\\(a=5\\)",
+      "\\(a=-5\\)",
+      "\\(a=1\\)"
+    ],
+    [1]
+  ),
+  // #73
+  makeProblem(
+    "\\(a x^2 +4ax +3a +4=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=4\\)",
+      "\\(a=3\\)",
+      "\\(a=-4\\)",
+      "\\(a=0\\)"
+    ],
+    [0]
+  ),
+  // #74
+  makeProblem(
+    "\\(x^2 +4ax + (a^2 +6a)=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=2\\)",
+      "\\(a=0\\)",
+      "\\(a=2\\text{ 또는 }0\\)",
+      "\\(a=-2\\)"
+    ],
+    [2]
+  ),
+  // #75
+  makeProblem(
+    "\\(x^2 - (a+2)x + (2a+1)=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=0\\)",
+      "\\(a=4\\)",
+      "\\(a=0\\text{ 또는 }4\\)",
+      "\\(a=1\\)"
+    ],
+    [2]
+  ),
+  // #76
+  makeProblem(
+    "\\(x^2 + (a+5)x + (2a+7)=0\\) 이 [중근] 되도록 하는 \\(a\\)?",
+    [
+      "\\(a=-3\\)",
+      "\\(a=1\\)",
+      "\\(a=-3\\text{ 또는 }1\\)",
+      "\\(\\text{그런 }a\\text{는 없음}\\)"
+    ],
+    [2]
+  ),
+  // #77
+  makeProblem(
+    "이차방정식 \\(x^2 +2(k-a)x + k^2 + b +1=0\\) 이 \\(k\\)와 무관하게 [중근]. 적절한 \\(a,b\\)?",
+    [
+      "\\(a=-2,\\; b=-1\\)",
+      "\\(a=2,\\; b=1\\)",
+      "\\(a=0,\\; b=0\\)",
+      "\\(a=-1,\\; b=-2\\)"
+    ],
+    [0]
+  ),
+  // #78
+  makeProblem(
+    "이차방정식 \\(x^2 +2(a-k)x + k^2 -2k - b=0\\) 이 [항상 중근]. \\(a,b\\)?",
+    [
+      "\\(a=1,\\; b=-2\\)",
+      "\\(a=-2,\\; b=1\\)",
+      "\\(a=0,\\; b=-1\\)",
+      "\\(\\text{항상 불가능}\\)"
+    ],
+    [0]
+  ),
+  // #79
+  makeProblem(
+    "이차방정식 \\(x^2 +(2k+a)x + k^2 + k + b=0\\) 이 항상 [중근]. \\(a,b\\)?",
+    [
+      "\\(a=1,\\; b=\\tfrac14\\)",
+      "\\(a=-1,\\; b=4\\)",
+      "\\(a=0,\\; b=0\\)",
+      "\\(\\text{항상 불가능}\\)"
+    ],
+    [0]
+  ),
+  // #80
+  makeProblem(
+    "이차방정식 \\(x^2 -2(a+k)x + k^2 +6k + b=0\\) 이 항상 [중근]. \\(a,b\\)?",
+    [
+      "\\(a=3,\\; b=9\\)",
+      "\\(a=-3,\\; b=-9\\)",
+      "\\(a=0,\\; b=1\\)",
+      "\\(\\text{항상 불가능}\\)"
+    ],
+    [0]
+  ),
+  // #81
+  makeProblem(
+    "이차방정식 \\(x^2 +(2k-1)x + k^2 - ak - b=0\\) 이 항상 [중근]. \\(a,b\\)?",
+    [
+      "\\(a=1,\\; b=-\\tfrac14\\)",
+      "\\(a=-1,\\; b=\\tfrac14\\)",
+      "\\(a=2,\\; b=1\\)",
+      "\\(\\text{불가능}\\)"
+    ],
+    [0]
+  )
+];
+
+//======================================================================
+// 난이도별 설정
+let timePerQuestion = 0;
+let scorePerCorrect = 0;
+let totalScore = 0;
+let lives = 3;
+let totalTime = 0;  // 전체 경과 시간(초)
+let timerInterval = null; // 전체시간 측정용
+let energyInterval = null; // 문제별 에너지(시간) 측정용
+let energyMax = 100; // 에너지바 % 초기값
+let energy = energyMax;  // 현재 에너지
+let currentProblemIndex = 0;
+let usedProblems = [];  // 문제 배열(섞은 후)
+let nameStr = "";
+
+//====================================================
+// 유틸: 배열 셔플
+function shuffleArray(arr) {
+  for(let i=arr.length-1; i>0; i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+// 게임 시작
+function startGame() {
+  nameStr = document.getElementById('playerName').value.trim();
+  if(!nameStr) nameStr = "익명";
+
+  const diff = document.getElementById('difficulty').value;
+  if(diff==="top"){
+    timePerQuestion = 20; // 최상
+    scorePerCorrect = 20;
+  } else if(diff==="high"){
+    timePerQuestion = 30; // 상
+    scorePerCorrect = 15;
+  } else if(diff==="medium"){
+    timePerQuestion = 40; // 중
+    scorePerCorrect = 13;
+  } else {
+    timePerQuestion = 999999; // 하(무제한)
+    scorePerCorrect = 10;
+  }
+
+  usedProblems = [...allProblems];
+  shuffleArray(usedProblems);
+
+  totalScore = 0;
+  lives = 3;
+  totalTime = 0;
+  currentProblemIndex = 0;
+
+  document.getElementById('startScreen').classList.add('hidden');
+  document.getElementById('gameScreen').classList.remove('hidden');
+  document.getElementById('lives').textContent = lives;
+  document.getElementById('score').textContent = totalScore;
+  document.getElementById('totalTime').textContent = 0;
+
+  // 전체시간 타이머
+  timerInterval = setInterval(()=>{
+    totalTime++;
+    document.getElementById('totalTime').textContent = totalTime;
+  }, 1000);
+
+  showProblem();
+}
+
+// 문제 보여주기
+function showProblem() {
+  if(lives<=0){
+    endGame();
+    return;
+  }
+  // 무한출제
+  if(currentProblemIndex>=usedProblems.length){
+    shuffleArray(usedProblems);
+    currentProblemIndex=0;
+  }
+
+  energy = energyMax;
+  updateEnergyBar();
+
+  // 문제별 시간 제한
+  if(energyInterval) clearInterval(energyInterval);
+  if(timePerQuestion<999999){
+    const decreaseStep = energyMax / timePerQuestion / 10; 
+    energyInterval = setInterval(()=>{
+      energy -= decreaseStep;
+      if(energy<=0){
+        energy=0;
+        lives--;
+        document.getElementById('lives').textContent = lives;
+        clearInterval(energyInterval);
+        if(lives<=0) {
+          endGame();
+          return;
+        }
+        // 시간끝 => 다음문제
+        nextQuestion(true);
+      }
+      updateEnergyBar();
+    },100);
+  }
+
+  const p = usedProblems[currentProblemIndex];
+  // localChoices: { text, originalIndex }
+  let localChoices = p.choices.map((txt,i)=>({text:txt, idx:i}));
+  shuffleArray(localChoices);
+
+  // 문제 표시
+  document.getElementById('questionContainer').innerHTML = "<p>"+p.question+"</p>";
+
+  let cHtml = "";
+  localChoices.forEach(obj=>{
+    cHtml += `<button class="choiceBtn" onclick="checkAnswer(${obj.idx})">${obj.text}</button>`;
+  });
+  document.getElementById('choicesContainer').innerHTML = cHtml;
+  
+  // 수식 렌더링
+  MathJax.typeset();
+}
+
+// 정답체크
+function checkAnswer(choiceIdx) {
+  clearInterval(energyInterval);
+
+  let p = usedProblems[currentProblemIndex];
+  // p.correctIdx 배열에 choiceIdx가 들어있으면 정답
+  if(p.correctIdx.includes(choiceIdx)){
+    // 정답
+    totalScore += scorePerCorrect;
+    document.getElementById('score').textContent = totalScore;
+  } else {
+    // 오답
+    lives--;
+    document.getElementById('lives').textContent = lives;
+    // 정답이 여러개면 첫 항만 표시 or 전부 표시
+    let answers = p.correctIdx.map(ci => p.choices[ci]).join(" / ");
+    alert("틀렸습니다.\n정답: "+answers);
+    if(lives<=0){
+      endGame();
+      return;
+    }
+  }
+  nextQuestion(false);
+}
+
+function nextQuestion(timeOut){
+  clearInterval(energyInterval);
+  if(!timeOut) currentProblemIndex++;
+  showProblem();
+}
+
+function updateEnergyBar(){
+  const ratio = Math.max(0, energy/energyMax)*100;
+  document.getElementById('energyFill').style.width = ratio+"%";
+}
+
+// 게임 종료
+function endGame(){
+  clearInterval(timerInterval);
+  clearInterval(energyInterval);
+  document.getElementById('gameScreen').classList.add('hidden');
+  document.getElementById('gameOverScreen').classList.remove('hidden');
+  document.getElementById('finalScore').textContent = totalScore;
+}
+
+// 점수 전송
+function sendScore(){
+  saveData("판별식", nameStr, totalScore, totalTime);
+}
+
+// 서버 전송 함수 (비동기)
+async function saveData(game, name, score, elapsedTime) {
+  const FUNCTION_URL = "https://us-central1-record-f420d.cloudfunctions.net/report";
+  const requestData = {
+    game,
+    name,
+    score: parseInt(score, 10),
+    elapsedTime: parseInt(elapsedTime, 10)
+  };
+  try {
+    const response = await fetch(FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestData)
+    });
+    const responseData = await response.json();
+    if (response.ok) {
+      document.getElementById('response').innerText = 
+        "성공: " + JSON.stringify(responseData, null, 2);
+    } else {
+      document.getElementById('response').innerText = 
+        "오류: " + JSON.stringify(responseData, null, 2);
+    }
+  } catch (error) {
+    console.error('요청 실패:', error);
+    document.getElementById('response').innerText =
+      "네트워크 오류: " + error.message;
+  }
+}
+</script>
+</body>
+</html>
